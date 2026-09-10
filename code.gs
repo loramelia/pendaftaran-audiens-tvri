@@ -1,69 +1,61 @@
-function doGet() {
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
-    .setTitle('Pendaftaran Audiens TVRI - Hari Pangan Nasional 2026')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+const SHEET_NAME = 'Pendaftar';
+const MAX_CAPACITY = 20;
+
+function setup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+    sheet.appendRow(['ID Tiket', 'Nama Lengkap', 'No HP', 'Waktu Pendaftaran']);
+    sheet.setFrozenRows(1);
+  }
 }
 
-function simpanData(formObject) {
-  try {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    
-    // Jika sheet masih kosong, buatkan header
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(['Waktu Daftar', 'Kode Tiket', 'Nama Lengkap', 'No HP / WA']);
-    }
-    
-    // Hitung jumlah pendaftar
-    var totalPendaftar = sheet.getLastRow() - 1; // Kurangi baris header
-    var maxKuota = 20;
-    
-    if (totalPendaftar >= maxKuota) {
-      return { success: false, message: 'Mohon maaf, kuota 20 pendaftar sudah penuh!' };
-    }
-    
-    // Buat ID Tiket otomatis (misal: HPN-2026-015)
-    var newNumber = totalPendaftar + 1;
-    var ticketId = 'HPN-2026-' + ("00" + newNumber).slice(-3);
-    var timestamp = new Date();
-    
-    // Simpan baris ke Google Sheets
-    sheet.appendRow([
-      timestamp,
-      ticketId,
-      formObject.fullName,
-      "'" + formObject.phoneNumber // Tanda petik agar angka 0 di awal tidak hilang
-    ]);
-    
-    return { 
-      success: true, 
-      ticketId: ticketId,
-      fullName: formObject.fullName,
-      phoneNumber: formObject.phoneNumber,
-      message: 'Pendaftaran berhasil!' 
-    };
-  } catch (error) {
-    return { success: false, message: error.toString() };
-  }
+function getSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) { setup(); sheet = ss.getSheetByName(SHEET_NAME); }
+  return sheet;
 }
 
 function ambilDaftarPeserta() {
   try {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    var data = sheet.getDataRange().getValues();
-    var list = [];
-    
-    // Ambil data mulai dari baris ke-2 (mengabaikan header)
-    for (var i = 1; i < data.length; i++) {
-      list.push({
-        time: data[i][0],
-        id: data[i][1],
-        name: data[i][2],
-        phone: data[i][3]
-      });
-    }
-    return { success: true, data: list };
-  } catch (e) {
-    return { success: false, data: [] };
-  }
+    const rows = getSheet_().getDataRange().getValues();
+    const data = rows.slice(1).filter(row => row[1]).map(row => ({
+      id: String(row[0] || ''), name: String(row[1] || ''),
+      phone: String(row[2] || ''), time: String(row[3] || '')
+    }));
+    return { success: true, data: data };
+  } catch (err) { return { success: false, message: String(err), data: [] }; }
+}
+
+function simpanData(formObject) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const fullName = String(formObject.fullName || '').trim();
+    const phoneNumber = String(formObject.phoneNumber || '').trim();
+    if (!fullName || !phoneNumber) return { success: false, message: 'Nama dan Nomor HP wajib diisi!' };
+    const sheet = getSheet_();
+    const participants = sheet.getDataRange().getValues().slice(1).filter(row => row[1]);
+    if (participants.length >= MAX_CAPACITY) return { success: false, message: 'Mohon maaf, kuota pendaftaran sudah penuh (20 orang)!' };
+    if (participants.some(row => String(row[2] || '').trim() === phoneNumber)) return { success: false, message: 'Nomor WhatsApp ini sudah terdaftar sebelumnya!' };
+    const ticketId = 'HPN-2026-' + String(participants.length + 1).padStart(3, '0');
+    const timestamp = Utilities.formatDate(new Date(), 'Asia/Makassar', 'dd-MM-yyyy HH:mm:ss');
+    sheet.appendRow([ticketId, fullName, phoneNumber, timestamp]);
+    return { success: true, ticketId: ticketId, fullName: fullName, phoneNumber: phoneNumber, message: 'Pendaftaran berhasil disimpan.' };
+  } catch (err) { return { success: false, message: 'Terjadi kesalahan server: ' + String(err) }; }
+  finally { if (lock.hasLock()) lock.releaseLock(); }
+}
+
+function json_(data) { return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON); }
+
+function doGet(e) {
+  if ((e.parameter.action || '') !== 'participants') return json_({ success: false, message: 'Endpoint aktif.' });
+  return json_(ambilDaftarPeserta());
+}
+
+function doPost(e) {
+  try { return json_(simpanData(JSON.parse((e.postData && e.postData.contents) || '{}'))); }
+  catch (err) { return json_({ success: false, message: 'Format data tidak valid.' }); }
 }
