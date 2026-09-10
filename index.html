@@ -299,34 +299,18 @@
     const maxCapacity = 20;
     let registeredList = [];
 
-    document.addEventListener("DOMContentLoaded", function() {
-      // Ambil data pendaftar nyata langsung dari Google Sheets jika berjalan di Apps Script
-      if (typeof google !== 'undefined' && google.script && google.script.run) {
-        google.script.run
-          .withSuccessHandler(function(res) {
-            if (res && res.success && res.data && res.data.length > 0) {
-              registeredList = res.data.map(item => {
-                const phoneStr = String(item.phone || '');
-                const maskedPhone = phoneStr.length > 7 
-                  ? phoneStr.substring(0, 4) + 'xxxx' + phoneStr.substring(phoneStr.length - 3)
-                  : phoneStr;
-                return {
-                  id: item.id,
-                  name: item.name,
-                  phone: maskedPhone,
-                  rawPhone: phoneStr,
-                  time: item.time ? new Date(item.time).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }) : ''
-                };
-              });
-            }
-            updateQuotaUI();
-            renderAttendeesList();
-          })
-          .ambilDaftarPeserta();
-      } else {
-        updateQuotaUI();
-        renderAttendeesList();
+    document.addEventListener("DOMContentLoaded", async function() {
+      try {
+        const response = await fetch('/api/participants');
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.message || 'Gagal memuat data peserta.');
+        registeredList = Array.isArray(result.data) ? result.data : [];
+      } catch (error) {
+        console.error(error);
+        showAlert('Data peserta belum dapat dimuat. Silakan coba lagi.');
       }
+      updateQuotaUI();
+      renderAttendeesList();
     });
 
     function updateQuotaUI() {
@@ -397,81 +381,25 @@
       btnSubmit.disabled = true;
       btnSubmit.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>Menyimpan ke Sheets...</span>`;
 
-      // Jika berjalan di Google Apps Script
-      if (typeof google !== 'undefined' && google.script && google.script.run) {
-        google.script.run
-          .withSuccessHandler(function(res) {
-            btnSubmit.disabled = false;
-            btnSubmit.innerHTML = originalBtnContent;
-
-            if (res && res.success) {
-              const maskedPhone = phoneInput.length > 7 
-                ? phoneInput.substring(0, 4) + 'xxxx' + phoneInput.substring(phoneInput.length - 3)
-                : phoneInput;
-
-              const newParticipant = {
-                id: res.ticketId,
-                name: res.fullName,
-                phone: maskedPhone,
-                rawPhone: res.phoneNumber,
-                time: "Baru saja"
-              };
-
-              registeredList.push(newParticipant);
-              updateQuotaUI();
-              renderAttendeesList();
-              showTicket(newParticipant);
-
-              if (typeof confetti === 'function') {
-                confetti({ particleCount: 70, spread: 60, origin: { y: 0.7 } });
-              }
-
-              document.getElementById('registrationForm').reset();
-            } else {
-              showAlert(res ? res.message : "Gagal menyimpan pendaftaran.");
-            }
-          })
-          .withFailureHandler(function(err) {
-            btnSubmit.disabled = false;
-            btnSubmit.innerHTML = originalBtnContent;
-            showAlert("Terjadi kesalahan sistem: " + err.message);
-          })
-          .simpanData(document.getElementById('registrationForm'));
-      } else {
-        // Fallback untuk pratinjau lokal
-        setTimeout(() => {
-          btnSubmit.disabled = false;
-          btnSubmit.innerHTML = originalBtnContent;
-
-          const newNum = registeredList.length + 1;
-          const ticketId = `HPN-2026-${String(newNum).padStart(3, '0')}`;
-          const now = new Date();
-          const timeStr = `${now.getDate()} Sep, ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-
-          const maskedPhone = phoneInput.length > 7 
-            ? phoneInput.substring(0, 4) + 'xxxx' + phoneInput.substring(phoneInput.length - 3)
-            : phoneInput;
-
-          const newParticipant = {
-            id: ticketId,
-            name: nameInput,
-            phone: maskedPhone,
-            rawPhone: phoneInput,
-            time: timeStr
-          };
-
-          registeredList.push(newParticipant);
-
-          updateQuotaUI();
-          renderAttendeesList();
-          showTicket(newParticipant);
-
-          if (typeof confetti === 'function') {
-            confetti({ particleCount: 70, spread: 60, origin: { y: 0.7 } });
-          }
-
-          document.getElementById('registrationForm').reset();
-        }, 500);
+      try {
+        const response = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fullName: nameInput, phoneNumber: phoneInput })
+        });
+        const res = await response.json();
+        if (!response.ok || !res.success) throw new Error(res.message || 'Gagal menyimpan pendaftaran.');
+        const newParticipant = { id: res.ticketId, name: res.fullName, phone: res.maskedPhone, rawPhone: res.phoneNumber, time: 'Baru saja' };
+        registeredList.push(newParticipant);
+        updateQuotaUI(); renderAttendeesList(); showTicket(newParticipant);
+        if (typeof confetti === 'function') confetti({ particleCount: 70, spread: 60, origin: { y: 0.7 } });
+        document.getElementById('registrationForm').reset();
+      } catch (error) {
+        console.error(error);
+        showAlert(error.message || 'Terjadi kesalahan sistem.');
+      } finally {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = originalBtnContent;
       }
     }
 
